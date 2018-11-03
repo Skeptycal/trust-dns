@@ -18,7 +18,7 @@ use futures::{future, task, Async, Future, Poll};
 
 use proto::op::{Message, Query, ResponseCode};
 use proto::rr::domain::usage::{
-    IN_ADDR_ARPA_127, IP6_ARPA_1, ResolverUsage, DEFAULT, INVALID, LOCAL,
+    ResolverUsage, DEFAULT, INVALID, IN_ADDR_ARPA_127, IP6_ARPA_1, LOCAL,
     LOCALHOST as LOCALHOST_usage,
 };
 use proto::rr::{DNSClass, Name, RData, Record, RecordType};
@@ -201,44 +201,43 @@ impl<C: DnsHandle + 'static> QueryFuture<C> {
         // seek out CNAMES, this is only performed if the query is not a CNAME, ANY, or SRV
         let (search_name, cname_ttl, was_cname) = {
             // this will only search for CNAMEs if the request was not meant to be for one of the triggers for recursion
-            let (search_name, cname_ttl, was_cname) = if self.query.query_type().is_any()
-                || self.query.query_type().is_cname()
-            {
-                (Cow::Borrowed(self.query.name()), INITIAL_TTL, false)
-            } else {
-                // Folds any cnames from the answers section, into the final cname in the answers section
-                //   this works by folding the last CNAME found into the final folded result.
-                //   it assumes that the CNAMEs are in chained order in the DnsResponse Message...
-                // For SRV, the name added for the search becomes the target name.
-                //
-                // TODO: should this include the additionals?
-                response.messages().flat_map(Message::answers).fold(
-                    (Cow::Borrowed(self.query.name()), INITIAL_TTL, false),
-                    |(search_name, cname_ttl, was_cname), r| {
-                        match r.rdata() {
-                            &RData::CNAME(ref cname) => {
-                                // take the minimum TTL of the cname_ttl and the next record in the chain
-                                let ttl = cname_ttl.min(r.ttl());
-                                debug_assert_eq!(r.rr_type(), RecordType::CNAME);
-                                if search_name.as_ref() == r.name() {
-                                    return (Cow::Owned(cname.clone()), ttl, true);
+            let (search_name, cname_ttl, was_cname) =
+                if self.query.query_type().is_any() || self.query.query_type().is_cname() {
+                    (Cow::Borrowed(self.query.name()), INITIAL_TTL, false)
+                } else {
+                    // Folds any cnames from the answers section, into the final cname in the answers section
+                    //   this works by folding the last CNAME found into the final folded result.
+                    //   it assumes that the CNAMEs are in chained order in the DnsResponse Message...
+                    // For SRV, the name added for the search becomes the target name.
+                    //
+                    // TODO: should this include the additionals?
+                    response.messages().flat_map(Message::answers).fold(
+                        (Cow::Borrowed(self.query.name()), INITIAL_TTL, false),
+                        |(search_name, cname_ttl, was_cname), r| {
+                            match r.rdata() {
+                                &RData::CNAME(ref cname) => {
+                                    // take the minimum TTL of the cname_ttl and the next record in the chain
+                                    let ttl = cname_ttl.min(r.ttl());
+                                    debug_assert_eq!(r.rr_type(), RecordType::CNAME);
+                                    if search_name.as_ref() == r.name() {
+                                        return (Cow::Owned(cname.clone()), ttl, true);
+                                    }
                                 }
-                            }
-                            &RData::SRV(ref srv) => {
-                                // take the minimum TTL of the cname_ttl and the next record in the chain
-                                let ttl = cname_ttl.min(r.ttl());
-                                debug_assert_eq!(r.rr_type(), RecordType::SRV);
+                                &RData::SRV(ref srv) => {
+                                    // take the minimum TTL of the cname_ttl and the next record in the chain
+                                    let ttl = cname_ttl.min(r.ttl());
+                                    debug_assert_eq!(r.rr_type(), RecordType::SRV);
 
-                                // the search name becomes the srv.target
-                                return (Cow::Owned(srv.target().clone()), ttl, true);
+                                    // the search name becomes the srv.target
+                                    return (Cow::Owned(srv.target().clone()), ttl, true);
+                                }
+                                _ => (),
                             }
-                            _ => (),
-                        }
 
-                        (search_name, cname_ttl, was_cname)
-                    },
-                )
-            };
+                            (search_name, cname_ttl, was_cname)
+                        },
+                    )
+                };
 
             // take all answers. // TODO: following CNAMES?
             let answers: Vec<Record> = response
@@ -350,8 +349,7 @@ impl<C: DnsHandle + 'static> Future for QueryFuture<C> {
 
                 match message.response_code() {
                     ResponseCode::NXDomain => Ok(Async::Ready(self.handle_nxdomain(
-                        message,
-                        false, /* false b/c DNSSec should not cache NXDomain */
+                        message, false, /* false b/c DNSSec should not cache NXDomain */
                     ))),
                     ResponseCode::NoError => self.handle_noerror(message),
                     r @ _ => Err(ResolveErrorKind::Msg(format!("DNS Error: {}", r)).into()),
@@ -491,12 +489,12 @@ impl<C: DnsHandle + 'static> QueryState<C> {
 
         match query_state {
             QueryState::Query(QueryFuture {
-                message_future: _,
+                message_future: _m,
                 query,
                 cache,
-                dnssec: _,
-                options: _,
-                client: _,
+                dnssec: _d,
+                options: _o,
+                client: _c,
             }) => {
                 mem::replace(
                     self,
@@ -513,12 +511,12 @@ impl<C: DnsHandle + 'static> QueryState<C> {
 
         match query_state {
             QueryState::Query(QueryFuture {
-                message_future: _,
+                message_future: _m,
                 query,
                 cache,
-                dnssec: _,
-                options: _,
-                client: _,
+                dnssec: _d,
+                options: _o,
+                client: _c,
             }) => {
                 match rdatas {
                     // There are Cnames to lookup
@@ -763,7 +761,7 @@ mod tests {
             &mut client,
             cache.clone(),
         ).wait()
-            .expect("lookup failed");
+        .expect("lookup failed");
 
         assert_eq!(
             ips.iter().cloned().collect::<Vec<_>>(),
@@ -797,7 +795,7 @@ mod tests {
             &mut client,
             cache.clone(),
         ).wait()
-            .expect("lookup failed");
+        .expect("lookup failed");
 
         assert_eq!(
             ips.iter().cloned().collect::<Vec<_>>(),
@@ -847,7 +845,7 @@ mod tests {
             &mut client,
             cache.clone(),
         ).wait()
-            .expect("lookup failed");
+        .expect("lookup failed");
 
         assert_eq!(
             ips.iter().cloned().collect::<Vec<_>>(),
@@ -978,8 +976,7 @@ mod tests {
                 .lookup(
                     Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::A),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .expect("should have returned localhost"),
             *LOCALHOST_V4
         );
@@ -989,8 +986,7 @@ mod tests {
                 .lookup(
                     Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::AAAA),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .expect("should have returned localhost"),
             *LOCALHOST_V6
         );
@@ -1000,8 +996,7 @@ mod tests {
                 .lookup(
                     Query::query(Name::from(Ipv4Addr::new(127, 0, 0, 1)), RecordType::PTR),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .expect("should have returned localhost"),
             *LOCALHOST
         );
@@ -1014,8 +1009,7 @@ mod tests {
                         RecordType::PTR
                     ),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .expect("should have returned localhost"),
             *LOCALHOST
         );
@@ -1025,8 +1019,7 @@ mod tests {
                 .lookup(
                     Query::query(Name::from_ascii("localhost.").unwrap(), RecordType::MX),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .is_err()
         );
 
@@ -1035,8 +1028,7 @@ mod tests {
                 .lookup(
                     Query::query(Name::from(Ipv4Addr::new(127, 0, 0, 1)), RecordType::MX),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .is_err()
         );
 
@@ -1048,8 +1040,7 @@ mod tests {
                         RecordType::MX
                     ),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .is_err()
         );
     }
@@ -1071,8 +1062,7 @@ mod tests {
                         RecordType::A,
                     ),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .is_err()
         );
     }
@@ -1103,8 +1093,7 @@ mod tests {
                         RecordType::A,
                     ),
                     Default::default()
-                )
-                .wait()
+                ).wait()
                 .is_ok()
         );
     }
